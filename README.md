@@ -1,4 +1,4 @@
-# aistudio
+AI Studio
 Deployed Version : https://salsa-ai-studio.streamlit.app/
 
 Salsa AI Studio combines:  
