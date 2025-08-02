@@ -2,12 +2,10 @@ import streamlit as st
 from PIL import Image
 import tempfile
 import numpy as np
-import av
 from pydub import AudioSegment
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import requests
+import base64
 import shutil
-
 
 # -----------------------
 # APP CONFIG
@@ -17,16 +15,10 @@ st.sidebar.title("🎯 Salsa AI Studio")
 menu = st.sidebar.radio("Select Tool", ["🏠 Home", "📄 Document OCR", "🎤 Voice to Text & Song Guess"])
 
 # -----------------------
-# CHECK SYSTEM REQUIREMENTS
+# CHECK FFmpeg
 # -----------------------
-# Check RAM
-ram = psutil.virtual_memory()
-if ram.available < 1 * 1024**3:  # < 1GB free
-    st.sidebar.warning("⚠️ Low RAM detected! Using smaller AI models.")
-
-# Check FFmpeg
 if shutil.which("ffmpeg") is None:
-    st.sidebar.error("⚠️ FFmpeg not found. Audio features may not work. Install from: https://www.gyan.dev/ffmpeg/builds/")
+    st.sidebar.error("⚠️ FFmpeg not found. Audio conversion may not work.")
 
 # -----------------------
 # LOAD MODELS
@@ -63,9 +55,11 @@ except Exception as e:
 # -----------------------
 # SONG GUESS FUNCTION
 # -----------------------
+GENIUS_API_KEY = "YOUR_GENIUS_API_KEY"  # Replace with real Genius API key
+
 def guess_song_from_lyrics(lyrics):
     base_url = "https://api.genius.com/search"
-    headers = {"Authorization": "Bearer YOUR_GENIUS_API_KEY"}  # Replace with Genius API Key
+    headers = {"Authorization": f"Bearer {GENIUS_API_KEY}"}
     params = {"q": lyrics[:100]}
     try:
         res = requests.get(base_url, headers=headers, params=params)
@@ -84,20 +78,20 @@ def guess_song_from_lyrics(lyrics):
 # HOME PAGE
 # -----------------------
 if menu == "🏠 Home":
-    st.title("🎯 Salsa AI Studio (Optimized)")
+    st.title("🎯 Salsa AI Studio")
     if model_error:
-        st.warning(f"⚠️ Some features may be disabled: {model_error}")
+        st.warning(f"⚠️ Some features disabled: {model_error}")
     st.markdown("""
-**Salsa AI Studio** includes:
-- 📄 **Document OCR** (Fast TrOCR)
-- 🎤 **Voice to Text & Song Guessing** (Tiny Whisper)
+**Features:**
+- 📄 Document OCR
+- 🎤 Voice to Text & Song Guess
 """)
 
 # -----------------------
 # DOCUMENT OCR
 # -----------------------
 elif menu == "📄 Document OCR":
-    st.title("📄 Document OCR (Fast TrOCR)")
+    st.title("📄 Document OCR")
     if ocr_pipe is None:
         st.error("❌ OCR model not loaded.")
     else:
@@ -124,69 +118,66 @@ elif menu == "🎤 Voice to Text & Song Guess":
     if voice_pipe is None:
         st.error("❌ Voice model not loaded.")
     else:
-        audio_file = st.file_uploader("🎵 Upload Audio (MP3/WAV)", type=["wav", "mp3"])
         audio_path = None
-
+        
+        # Upload Audio
+        audio_file = st.file_uploader("🎵 Upload Audio", type=["wav", "mp3"])
         if audio_file:
             if audio_file.name.endswith(".mp3"):
                 audio = AudioSegment.from_mp3(audio_file)
-                tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-                audio.export(tmp_wav.name, format="wav")
-                audio_path = tmp_wav.name
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                audio.export(tmp.name, format="wav")
+                audio_path = tmp.name
             else:
-                tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-                tmp_wav.write(audio_file.read())
-                audio_path = tmp_wav.name
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                tmp.write(audio_file.read())
+                audio_path = tmp.name
 
-        class AudioRecorder(AudioProcessorBase):
-            def __init__(self):
-                self.frames = []
-                self.is_recording = False
+        st.markdown("---")
+        st.subheader("🎤 Record Voice (No extra deps)")
 
-            def start(self):
-                self.is_recording = True
-                self.frames = []
+        # JavaScript Recorder
+        audio_recorder_code = """
+        <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        async function startRecording() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            mediaRecorder.ondataavailable = e => { audioChunks.push(e.data); };
+            mediaRecorder.onstop = e => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64data = reader.result.split(',')[1];
+                    const input = window.parent.document.querySelector('input[data-testid="stTextInput"]');
+                    input.value = base64data;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                };
+                reader.readAsDataURL(audioBlob);
+            };
+            mediaRecorder.start();
+        }
+        function stopRecording() {
+            mediaRecorder.stop();
+        }
+        </script>
+        <button onclick="startRecording()">🎙️ Start Recording</button>
+        <button onclick="stopRecording()">⏹️ Stop Recording</button>
+        """
+        
+        recorded_base64 = st.text_input("Recorded Audio (hidden)", type="default", label_visibility="hidden")
+        st.components.v1.html(audio_recorder_code, height=100)
 
-            def stop(self):
-                self.is_recording = False
+        if recorded_base64:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            tmp.write(base64.b64decode(recorded_base64))
+            audio_path = tmp.name
+            st.success("✅ Voice recorded successfully.")
 
-            def recv_audio(self, frame: av.AudioFrame) -> av.AudioFrame:
-                if self.is_recording:
-                    self.frames.append(frame.to_ndarray())
-                return frame
-
-        st.subheader("🎤 Record Voice")
-        st.caption("Click 'Start Recording' → 'Stop Recording' when done.")
-
-        webrtc_ctx = webrtc_streamer(
-            key="voice-recorder",
-            mode=WebRtcMode.SENDRECV,
-            audio_processor_factory=AudioRecorder,
-            media_stream_constraints={"audio": True, "video": False},
-            audio_receiver_size=256
-        )
-
-        if webrtc_ctx.audio_processor:
-            col1, col2 = st.columns(2)
-            if col1.button("▶️ Start Recording"):
-                webrtc_ctx.audio_processor.start()
-                st.info("Recording started...")
-            if col2.button("⏹ Stop Recording"):
-                webrtc_ctx.audio_processor.stop()
-                st.success("Recording stopped.")
-
-        if webrtc_ctx.audio_processor and not webrtc_ctx.audio_processor.is_recording and webrtc_ctx.audio_processor.frames:
-            all_audio = np.concatenate(webrtc_ctx.audio_processor.frames, axis=0)
-            tmp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            AudioSegment(
-                all_audio.tobytes(),
-                frame_rate=16000,
-                sample_width=all_audio.dtype.itemsize,
-                channels=1
-            ).export(tmp_wav.name, format="wav")
-            audio_path = tmp_wav.name
-
-        if audio_path:
+        # Process audio
+        if audio_path and st.button("▶️ Transcribe & Guess"):
             with st.spinner("Processing audio..."):
                 try:
                     text_result = voice_pipe(audio_path)
