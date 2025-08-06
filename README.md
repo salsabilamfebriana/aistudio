@@ -50,6 +50,7 @@ Extracted text in the output box.
 
 5️⃣ 🎤 Voice to Text & Song Guess
 Purpose: Transcribe speech or song lyrics from audio and guess song title.
+
 Option A: Upload Existing Audio
 - Click Voice to Text & Song Guess in sidebar.
 - Upload .wav or .mp3 file.
@@ -57,6 +58,7 @@ Option A: Upload Existing Audio
 View:
 - Transcribed text
 - Guessed song title
+  
 Option B: Record Live Audio
 - Click Voice to Text & Song Guess.
 - Scroll to JS Recorder section.
